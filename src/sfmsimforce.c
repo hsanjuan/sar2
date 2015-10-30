@@ -183,7 +183,7 @@ static SFMBoolean SFMForceCollisionCheck(
 	    model2 = realm->model[i];
 	    if(model2 == NULL)
 		continue;
-		 
+
 	    if(!(model2->flags & (SFMFlagPosition | SFMFlagCanCauseCrash |
 				  SFMFlagCrashContactShape |
 				  SFMFlagCrashableSizeRadius)
@@ -195,7 +195,7 @@ static SFMBoolean SFMForceCollisionCheck(
 	    if(model2 == model)	/* Skip itself */
 		continue;
 
-	    /* Calculate distance in meters */  
+	    /* Calculate distance in meters */
 	    r = SFMHypot2(
 		model2->position.x - pos->x,
 		model2->position.y - pos->y
@@ -230,7 +230,7 @@ static SFMBoolean SFMForceCollisionCheck(
 
 			/* Callback deleted model? */
 			if(SFMModelInRealm(realm, model) < 0)
-			    return(status);  
+			    return(status);
 		    }
 		}
 		else if((model2->crash_contact_shape == SFMCrashContactShapeCylendrical) &&
@@ -320,7 +320,7 @@ static SFMBoolean SFMForceCollisionCheck(
 		}
 	    }
 	}
-		
+
 	return(status);
 }
 #endif
@@ -378,7 +378,7 @@ static int SFMForceApplySlew(
 		time_compensation * time_compression;
 	    a[2] = 0.0;
 
-	    /* Rotate position change so that it is relative to world 
+	    /* Rotate position change so that it is relative to world
 	     * cooridnates.
 	     */
 	    MatrixRotateHeading3(a, dir->heading, r);
@@ -716,7 +716,7 @@ int SFMForceApplyNatural(
 			else
 			{
 			    /* Pitched down so need to pitch up */
-			    dir->pitch -= pitch_leveling_rate * 
+			    dir->pitch -= pitch_leveling_rate *
 				time_compensation * time_compression;
 			    if(dir->pitch < pitch_down_max)
 				dir->pitch = pitch_down_max;
@@ -738,7 +738,7 @@ int SFMForceApplyNatural(
 			/* Pitched down so need to pitch up */
 			dir->pitch -= pitch_leveling_rate *
 			    time_compensation * time_compression;
-			if(dir->pitch < (0.0 * PI))  
+			if(dir->pitch < (0.0 * PI))
 			    dir->pitch = (0.0 * PI);
 		    }
 		}
@@ -824,7 +824,7 @@ int SFMForceApplyNatural(
 		    else
 		    {
 			vel->x -= x_vel_ground_drag;
-			if(vel->x < 0.0) 
+			if(vel->x < 0.0)
 			    vel->x = 0.0;
 		    }
 
@@ -836,7 +836,7 @@ int SFMForceApplyNatural(
 			    vel->y = 0.0;
 		    }
 		    else
-		    {   
+		    {
 			vel->y -= x_vel_ground_drag;
 			if(vel->y < 0.0)
 			    vel->y = 0.0;
@@ -932,7 +932,7 @@ int SFMForceApplyNatural(
 			    1.0 - (((2.0 * PI) - dir->bank) / (0.5 * PI)),
 			    0.0
 			);
-		        dir->bank = dir->bank + (leveling_coeff * 
+		        dir->bank = dir->bank + (leveling_coeff *
 			    model->attitude_leveling_rate.bank *
 			    time_compensation * time_compression
 		        );
@@ -1486,13 +1486,39 @@ int SFMForceApplyArtificial(
 		 * When the helicopter pitches forward and banks, the
 		 * heading will then change.
 		 */
+		float Airspeed = sqrtf(vel->x*vel->x + vel->y*vel->y + vel->z*vel->z);
+		//fprintf(stderr, "[mab] airspeed: %f\n", Airspeed);
+		float relative_pitch = sin_pitch + 0.5f * atan2(fabs(vel->x) + fabs(vel->y), Airspeed);
+		//fprintf(stderr, "[mab] relative pitch: %f\n", relative_pitch);
 		if(!model->landed_state)
 		    dir->heading = SFMSanitizeRadians(
-			dir->heading + (sin_pitch * sin_bank *
+			dir->heading + (relative_pitch * sin_bank *
 			    (0.2 * PI) *
 			    time_compensation * time_compression)
 		    );
+		// Determine if we have passed through etl
+		SFMPositionStruct	*pos = &model->position;
+		float GroundEffectAltitude = 16.0;
+		int isIGE = pos->z < GroundEffectAltitude / 2.0;
+		float GroundEffectCoeff = 1.0 + 0.876f;
+		float GroundEffectQty = 0.0f;
+		if(isIGE)
+		{
+			float thrust = thrust_output;
+			thrust_output = 1.2 * thrust_output;
+			//fprintf(stderr, "[mab] ige thrust bonus: %f => %f\n", thrust, thrust_output);
+		}
 
+		float ETLAirspeed = 16.0f;
+		int hasETL = Airspeed > ETLAirspeed;
+		if(!hasETL)
+		{
+			float thrust = thrust_output;
+			thrust_output *= (GroundEffectCoeff-1.0f);
+			//fprintf(stderr, "[mab] non etl thrust penalty: %f => %f\n", thrust, thrust_output);
+		}
+
+		//fprintf(stderr, "[mab] HeadingFromBank %f %f %f %f\n", dir->heading, sin_pitch, asin(sin_bank)*180.0/3.14159265, time_compensation*time_compression);
 
 	        /* XY Plane: Pitch and bank applied force */
 
@@ -1516,7 +1542,6 @@ int SFMForceApplyArtificial(
 		SFMOrthoRotate2D(dir->heading, &dic, &djc);
 		pos->x += dic;
 		pos->y += djc;
-
 
 		/* Vertical velocity */
 /*
@@ -1547,7 +1572,7 @@ int SFMForceApplyArtificial(
 		    dk_dv = dk_new - dk_prev;
 
 		    /* Add the previous velocit to the new delta change
-		     * in velocity multiplied by the time compensation 
+		     * in velocity multiplied by the time compensation
 		     * min. Make sure tc_min stays about 0.01 to ensure
 		     * that as this function cycles that it will converge
 		     * to dk.
@@ -1677,7 +1702,7 @@ int SFMForceApplyArtificial(
 		    if(vel->y < 0)
 		    {
 			vel->y += wheel_brakes_power;
-			if(vel->y > 0) 
+			if(vel->y > 0)
 			    vel->y = 0;
 		    }
 		    else
@@ -1830,7 +1855,7 @@ int SFMForceApplyControl(
 		    dir->bank = SFMSanitizeRadians(dir->bank + PI);
 		    if(dir->pitch > (1.0 * PI))
 			dir->pitch = SFMSanitizeRadians(
-			    (2.0 * PI) - dir->pitch + PI 
+			    (2.0 * PI) - dir->pitch + PI
 			);
 		    else
 			dir->pitch = SFMSanitizeRadians(
@@ -1939,7 +1964,7 @@ int SFMForceApplyControl(
 		    dir->bank = SFMSanitizeRadians(dir->bank + PI);
 		    if(dir->pitch > (1.0 * PI))
 			dir->pitch = SFMSanitizeRadians(
-			    (2.0 * PI) - dir->pitch + PI 
+			    (2.0 * PI) - dir->pitch + PI
 			);
 		    else
 			dir->pitch = SFMSanitizeRadians(

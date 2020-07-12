@@ -1054,7 +1054,7 @@ void SARSimSetSFMValues(
 			      SFMFlagCrashContactShape | SFMFlagCrashableSizeRadius |
 			      SFMFlagCrashableSizeZMin | SFMFlagCrashableSizeZMax |
 			      SFMFlagTouchDownCrashResistance | SFMFlagCollisionCrashResistance |
-			      SFMFlagStopped | SFMFlagLength | SFMFlagWingspan
+			      SFMFlagStopped | SFMFlagLength | SFMFlagWingspan | SFMFlagRotorDiameter
 		);
 
 	    /* Update flight model type only if SFM not in slew mode */
@@ -1110,6 +1110,7 @@ void SARSimSetSFMValues(
 	    TAR_PTR->belly_height = SRC_PTR->belly_height;
 	    TAR_PTR->length = SRC_PTR->length;
 	    TAR_PTR->wingspan = SRC_PTR->wingspan;
+	    TAR_PTR->rotor_diameter = SRC_PTR->rotor_diameter;
 	    TAR_PTR->ground_elevation_msl = obj_ptr->ground_elevation_msl;
 	    TAR_PTR->gear_state = (SFMBoolean)((lgear_ptr != NULL) ?
 		(lgear_ptr->flags & SAR_OBJ_PART_FLAG_STATE) : False

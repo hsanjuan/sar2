@@ -742,39 +742,65 @@ int SFMForceApplyNatural(
 			    dir->pitch = (0.0 * PI);
 		    }
 		}
-		/* Helicopter flight model in flight pitch attitude
-	         * leveling (bank leveling will be applied later).
-		 */
-		else if(flags & SFMFlagAttitudeLevelingRate)
+		/* Helicopter flight model in flight */
+		else
 		{
-		    double leveling_coeff;
+		    /* pitch attitude leveling (bank leveling will be applied later). */
+		    if(flags & SFMFlagAttitudeLevelingRate)
+		    {
+			double leveling_coeff;
 
-		    if(dir->pitch > (1.5 * PI))
-		    {
-			leveling_coeff = MIN(
-			    (dir->pitch - (1.5 * PI)) / (0.5 * PI),
-			    1.0
-			);
-			dir->pitch = MIN(
-			    dir->pitch + (leveling_coeff *
-			    model->attitude_leveling_rate.pitch *
-				time_compensation * time_compression),
-			    2.0 * PI
-			);
+			if(dir->pitch > (1.5 * PI))
+			{
+			    leveling_coeff = MIN(
+				(dir->pitch - (1.5 * PI)) / (0.5 * PI),
+				1.0
+				);
+			    dir->pitch = MIN(
+				dir->pitch + (leveling_coeff *
+					      model->attitude_leveling_rate.pitch *
+					      time_compensation * time_compression),
+				2.0 * PI
+				);
+			}
+			else if(dir->pitch < (0.5 * PI))
+			{
+			    leveling_coeff = MAX(
+				((0.5 * PI) - dir->pitch) / (0.5 * PI),
+				0.0
+				);
+			    dir->pitch = MAX(
+				dir->pitch - (leveling_coeff *
+					      model->attitude_leveling_rate.pitch *
+					      time_compensation * time_compression),
+				0.0 * PI
+				);
+			}
 		    }
-		    else if(dir->pitch < (0.5 * PI))
-		    {
-			leveling_coeff = MAX(
-			    ((0.5 * PI) - dir->pitch) / (0.5 * PI),
-			    0.0
+
+		    /* This adds induced flow that causes virtual pitch-for-bank induced heading changes.
+		     * atan2() becomes smaller if significant Z speed (up or down) compared to the total airspeed
+		     * (essentially hovering, since Z speeds are never too high). In such case, the helicopter
+		     * yaws a little less when rolling. Other than that atan is usually around 0.8.
+		     *
+		     * The aircraft changes heading depending on the pitch +
+		     * compensation from the atan2 above and the bank angle value.
+		     *
+		     * Original comment in this calculation was that:
+		     *
+		     * "relative_pitch is the actual helicopter picth plus the
+		     * inflow component of the airspeed. This ensures the
+		     * helicopter will turn at a standard rate (15 degree bank 100
+		     * knots 3 degrees a second)"
+		     *
+		     * We have however reduced the PI multiplier to 0.15 instead of 0.2.
+		     */
+		    double airspeed_3d = SFMHypot3(airspeed->x, airspeed->y, airspeed->z);
+		    double relative_pitch = sin(dir->pitch) + 0.5f * atan2(ABS(vel->x)+ABS(vel->y), airspeed_3d);
+		    dir->heading = SFMSanitizeRadians(
+			dir->heading + (relative_pitch * sin(dir->bank) *
+					(0.15 * PI) * time_compensation * time_compression)
 			);
-			dir->pitch = MAX(
-			    dir->pitch - (leveling_coeff *
-			    model->attitude_leveling_rate.pitch *
-				time_compensation * time_compression),
-			    0.0 * PI
-			);
-		    }
 		}
 	    }
 	    break;
@@ -1185,7 +1211,7 @@ int SFMForceApplyArtificial(
 	double	net_weight	      = 0.0;	/* net_mass * SAR_GRAVITY */
 	double	ground_elevation_msl  = model->ground_elevation_msl,
 		center_to_gear_height = 0.0;
-	double  airspeed_3d;
+	double  airspeed_3d, airspeed_2d;
 
 	double	tc_min		  = MIN(realm->time_compensation, 1.0);
 	double	time_compensation = realm->time_compensation;
@@ -1269,13 +1295,17 @@ int SFMForceApplyArtificial(
 	    }
 	}
 
+	if(flags & SFMFlagAirspeedVector)
+	{
+	    airspeed_3d = SFMHypot3(airspeed->x, airspeed->y, airspeed->z);
+	    airspeed_2d = SFMHypot2(airspeed->x, airspeed->y);
+	}
+
 	/* Check if current speed is exceeding its maximum expected
 	 * speed (overspeed).
 	 */
 	if(flags & (SFMFlagSpeedMax | SFMFlagAirspeedVector))
 	{
-	    /* Use all airspeeds. */
-	    airspeed_3d = SFMHypot3(airspeed->x, airspeed->y, airspeed->z);
 	    /* Current speed greater than expected overspeed? */
 	    if(airspeed_3d > model->overspeed_expected)
 	    {
@@ -1463,13 +1493,52 @@ int SFMForceApplyArtificial(
 	    if(flags & (SFMFlagPosition | SFMFlagDirection |
 			SFMFlagVelocityVector | SFMFlagAirspeedVector |
 			SFMFlagSpeedStall | SFMFlagSpeedMax |
-			SFMFlagAccelResponsiveness | SFMFlagLandedState)
+			SFMFlagAccelResponsiveness | SFMFlagLandedState |
+			SFMFlagBellyHeight
+		   )
 	    )
 	    {
 		double	sin_pitch = sin(dir->pitch),
 			cos_pitch = cos(dir->pitch),
 			sin_bank = sin(dir->bank),
 			cos_bank = cos(dir->bank);
+
+		double ige_height, rotor_height, ige_coeff;
+
+
+		/* IGE effect (In-Ground-Effect) adds more lift force when close to the ground.
+		 * We effectively give thrust_output a maximum of 28% bonus in that region.
+		 *
+		 * Effect starts at a rotor height of 1.25 rotor diameters.
+		 * http://www.copters.com/aero/ground_effect.html
+		 */
+
+		if(flags & SFMFlagRotorDiameter && model->rotor_diameter > 0)
+		{
+		    ige_height = 1.25 * model->rotor_diameter;
+		    // The rotor is as high as the center of the aircraft plus the
+		    // belly_height (assume distance from center to belly is the
+		    // same as from center to rotor.
+		    rotor_height = ABS(pos->z - model->ground_elevation_msl + model->belly_height);
+		    // Increases towards 1 when ground_elevation is lower. Non
+		    // linear, approximate by the square.
+		    ige_coeff = (1 - POW(CLIP(rotor_height, 0, ige_height) / ige_height, 2));
+		    // Increase thrust output 28% at most.
+		    thrust_output = (1 + 0.28 * ige_coeff) * thrust_output;
+		    //fprintf(stderr, "ige_coeff: %f\n", ige_coeff);
+		    //fprintf(stderr, "ige thrust bonus: %f\n", (1 + 0.28 * ige_coeff));
+		}
+
+
+		float ETLAirspeed = 16.0f;
+		int hasETL = airspeed_3d > ETLAirspeed;
+		if(!hasETL)
+		{
+		    //	float thrust = thrust_output;
+			thrust_output *= (GroundEffectCoeff-1.0f);
+			//fprintf(stderr, "[mab] non etl thrust penalty: %f => %f\n", thrust, thrust_output);
+		}
+
 
 		/* To calculate movement offset, use the equation:
 		 *
@@ -1486,39 +1555,6 @@ int SFMForceApplyArtificial(
 		 * When the helicopter pitches forward and banks, the
 		 * heading will then change.
 		 */
-		float Airspeed = sqrtf(vel->x*vel->x + vel->y*vel->y + vel->z*vel->z);
-		//fprintf(stderr, "[mab] airspeed: %f\n", Airspeed);
-		float relative_pitch = sin_pitch + 0.5f * atan2(fabs(vel->x) + fabs(vel->y), Airspeed);
-		//fprintf(stderr, "[mab] relative pitch: %f\n", relative_pitch);
-		if(!model->landed_state)
-		    dir->heading = SFMSanitizeRadians(
-			dir->heading + (relative_pitch * sin_bank *
-			    (0.2 * PI) *
-			    time_compensation * time_compression)
-		    );
-		// Determine if we have passed through etl
-		SFMPositionStruct	*pos = &model->position;
-		float GroundEffectAltitude = 16.0;
-		int isIGE = pos->z < GroundEffectAltitude / 2.0;
-		float GroundEffectCoeff = 1.0 + 0.876f;
-		float GroundEffectQty = 0.0f;
-		if(isIGE)
-		{
-			float thrust = thrust_output;
-			thrust_output = 1.2 * thrust_output;
-			//fprintf(stderr, "[mab] ige thrust bonus: %f => %f\n", thrust, thrust_output);
-		}
-
-		float ETLAirspeed = 16.0f;
-		int hasETL = Airspeed > ETLAirspeed;
-		if(!hasETL)
-		{
-			float thrust = thrust_output;
-			thrust_output *= (GroundEffectCoeff-1.0f);
-			//fprintf(stderr, "[mab] non etl thrust penalty: %f => %f\n", thrust, thrust_output);
-		}
-
-		//fprintf(stderr, "[mab] HeadingFromBank %f %f %f %f\n", dir->heading, sin_pitch, asin(sin_bank)*180.0/3.14159265, time_compensation*time_compression);
 
 	        /* XY Plane: Pitch and bank applied force */
 

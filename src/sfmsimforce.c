@@ -1504,7 +1504,7 @@ int SFMForceApplyArtificial(
 			cos_bank = cos(dir->bank);
 
 		double ige_height, rotor_height, ige_coeff;
-
+		double horizontallity_coeff = ABS(cos_pitch) * ABS(cos_bank);
 
 		/* IGE effect (In-Ground-Effect) adds more lift force when close to the ground.
 		 * We effectively give thrust_output a maximum of 28% bonus in that region.
@@ -1524,22 +1524,45 @@ int SFMForceApplyArtificial(
 		    // linear, approximate by the square.
 		    ige_coeff = (1 - POW(CLIP(rotor_height, 0, ige_height) / ige_height, 2));
 		    // Increase thrust output 28% at most.
-		    thrust_output = (1 + 0.28 * ige_coeff) * thrust_output;
+		    // TODO: only when parallel to ground
+		    thrust_output = (1 + 0.28 * ige_coeff * horizontallity_coeff) * thrust_output;
 		    //fprintf(stderr, "ige_coeff: %f\n", ige_coeff);
 		    //fprintf(stderr, "ige thrust bonus: %f\n", (1 + 0.28 * ige_coeff));
 		}
 
+		/* Effective Transactional Lift starts playing a part at SFMETLStart (16 knots) until
+		 * it is fully effective at SFMETLEnd (24 knots). Without ETL, we suffer a thrust
+		 * penalty of up to 25%.
+		 *
+		 * This makes ground approaches with wind gusts a bit trickier.
+		 */
+		// Goes from 1 (full penalty) to 0 when it reaches SFMETLEnd
+		double etl_coeff = 1 - CLIP(airspeed_2d - SFMETLStart / (SFMETLEnd - SFMETLStart), 0, 1);
+		fprintf(stderr, "etl_coeff: %f\n", etl_coeff);
+		thrust_output = (1 - 0.25 * etl_coeff * horizontallity_coeff) * thrust_output;
 
-		float ETLAirspeed = 16.0f;
-		int hasETL = airspeed_3d > ETLAirspeed;
-		if(!hasETL)
+		/* Torque causes change of heading to the right - simple
+		 * calculation based on current throttle_coeff. We consider
+		 * torque to be fully compensated at 2 * SFMETLEnd
+		 */
+
+		double torque_coeff = 1 - CLIP(airspeed_2d / (2 * SFMETLEnd), 0 , 1);
+		double torque_accel = torque_coeff * 0.5;
+		if(!model->landed_state)
 		{
-		    //	float thrust = thrust_output;
-			thrust_output *= (GroundEffectCoeff-1.0f);
-			//fprintf(stderr, "[mab] non etl thrust penalty: %f => %f\n", thrust, thrust_output);
+		    model->torque_velocity += torque_accel * time_compensation * time_compression;
+		    double dir_change = atan(model->torque_velocity) * 0.1 * model->throttle_coeff * time_compensation * time_compression;
+		    dir->heading += dir_change;
+		    fprintf(stderr, "torque accel: %f, torque_vel: %f, atan: %f, dir_change: %f\n", torque_accel, model->torque_velocity, atan(model->torque_velocity), dir_change);
+		} else {
+		    model->torque_velocity = 0.0;
 		}
 
 
+		
+		/* Transverse flow effect - starts at 5 knots, max magnitude at 20 knots, gone by 50 knots */
+		// TODO only when parallel to ground.
+		
 		/* To calculate movement offset, use the equation:
 		 *
 		 * (last_vel / compilation) + ((thrust_in_direction) / response)
@@ -2013,7 +2036,7 @@ int SFMForceApplyControl(
 		    dir->heading + (sin(dir->bank) * p_con_coeff *
 		    acr->pitch * -1 * time_compensation * time_compression)
 		);
-
+		printf("h_con_coeff: %f\n", h_con_coeff);
 
 		/* Check if engines are on */
 		if(1)

@@ -1290,6 +1290,8 @@ void SARSimGetSFMValues(sar_scene_struct *scene, sar_object_struct *obj_ptr)
 	    TAR_PTR->center_to_ground_height =
 		(float)SRC_PTR->center_to_ground_height;
 
+	    TAR_PTR->torque_velocity = (float)SRC_PTR->torque_velocity;
+	    
 	    /* Get z acceleration before updating velocity */
 	    TAR_PTR->z_accel = (float)SRC_PTR->velocity_vector.z -
 		TAR_PTR->vel.z;

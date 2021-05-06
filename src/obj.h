@@ -963,6 +963,9 @@ typedef struct {
 	 */
 	float		center_to_ground_height;
 
+	/* Rate of heading change due to torque (radians/cycle) */
+	float torque_velocity;
+
 
 	/* Moveable parts */
 	sar_obj_part_struct	**part;

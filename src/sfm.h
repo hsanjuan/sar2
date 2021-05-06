@@ -42,6 +42,12 @@
  */
 #define SFMDefaultGravity	9.80665
 
+
+/*
+ *	Effective transactional lift values in m/s
+ */
+#define SFMETLStart 8.23
+#define SFMETLEnd 12.35
 /*
  *	Core structure:
  */
